@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from llm import ask_llm
+from llm import ask_llm, summarize_result
 
 DEFAULT_MODEL = "gpt-4o"
 
@@ -46,8 +46,11 @@ st.caption("Faça perguntas em português sobre os dados de consumo dos clientes
 uploaded = st.file_uploader("Importe seu arquivo .txt (tabulado por tab)", type=["txt", "csv", "tsv"])
 
 if uploaded is not None:
-    st.session_state["df"] = parse_dataframe(uploaded)
-    st.session_state["messages"] = []
+    file_id = f"{uploaded.name}_{uploaded.size}"
+    if st.session_state.get("_uploaded_id") != file_id:
+        st.session_state["df"] = parse_dataframe(uploaded)
+        st.session_state["messages"] = []
+        st.session_state["_uploaded_id"] = file_id
 
 if "df" not in st.session_state:
     st.info("Envie um arquivo para começar.")
@@ -79,6 +82,17 @@ with st.sidebar:
 
     st.divider()
     model = st.selectbox("Modelo LLM", ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"], index=0)
+
+    chat_mode = st.radio(
+        "Modo do chat",
+        ["Isolado", "Contexto"],
+        index=0,
+        help="Isolado: cada pergunta é independente. Contexto: a IA lembra das perguntas anteriores.",
+    )
+    prev_mode = st.session_state.get("chat_mode")
+    st.session_state["chat_mode"] = chat_mode
+    if prev_mode is not None and prev_mode != chat_mode:
+        st.session_state["messages"] = []
 
     st.divider()
     st.caption("Dica: a IA gera código Pandas para responder. O cálculo é exato.")
@@ -133,8 +147,18 @@ if active_question:
 
     with st.chat_message("assistant"):
         with st.spinner("Pensando..."):
+            history = None
+            if chat_mode == "Contexto":
+                history = []
+                for msg in st.session_state.messages[:-1]:
+                    if msg["role"] == "user":
+                        history.append({"role": "user", "content": msg["content"]})
+                    elif msg["role"] == "assistant" and msg.get("code"):
+                        summary = summarize_result(msg["result"]) if msg.get("result") is not None else "Erro na execução"
+                        history.append({"role": "assistant", "content": f"{msg['code']}\n\n# Resultado:\n{summary}"})
+
             try:
-                code = ask_llm(active_question, df, model=model)
+                code = ask_llm(active_question, df, model=model, history=history or None)
             except Exception as e:
                 st.error(f"Erro ao chamar a LLM: {e}")
                 st.session_state.messages.append({"role": "assistant", "content": "", "error": str(e)})

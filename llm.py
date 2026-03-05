@@ -38,20 +38,48 @@ def _build_schema_description(df) -> str:
     return "\n".join(lines)
 
 
-def ask_llm(question: str, df, *, model: str = "gpt-4o", temperature: float = 0.0) -> str:
+def summarize_result(result) -> str:
+    """Gera um resumo textual curto do resultado para usar como contexto."""
+    import pandas as pd
+
+    if isinstance(result, pd.DataFrame):
+        preview = result.head(5).to_string(index=False)
+        return f"DataFrame ({result.shape[0]} linhas x {result.shape[1]} colunas):\n{preview}"
+    if isinstance(result, pd.Series):
+        preview = result.head(5).to_string()
+        return f"Series ({len(result)} itens):\n{preview}"
+    return str(result)
+
+
+def ask_llm(
+    question: str,
+    df,
+    *,
+    model: str = "gpt-4o",
+    temperature: float = 0.0,
+    history: list[dict] | None = None,
+) -> str:
     """Envia a pergunta + schema do df para a LLM e retorna o código Pandas gerado."""
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     schema = _build_schema_description(df)
-    user_message = f"### Schema do DataFrame `df`\n{schema}\n\n### Pergunta\n{question}"
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    schema_msg = f"### Schema do DataFrame `df`\n{schema}"
+
+    if history:
+        messages.append({"role": "user", "content": schema_msg})
+        messages.append({"role": "assistant", "content": "Entendido. Pode perguntar."})
+        messages.extend(history)
+        messages.append({"role": "user", "content": question})
+    else:
+        messages.append({"role": "user", "content": f"{schema_msg}\n\n### Pergunta\n{question}"})
 
     response = client.chat.completions.create(
         model=model,
         temperature=temperature,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        messages=messages,
     )
 
     code = response.choices[0].message.content.strip()
